@@ -37,6 +37,7 @@ class VariantResult:
     kind: str
     runs: list[RunResult] = field(default_factory=list)
     quality: QualityResults | None = None
+    tool_calling: Any = None  # ToolCallEvalResults
     power: PowerReading | None = None
     aggregated: dict[str, AggregatedMetric] = field(default_factory=dict)
     reference_outputs: dict[str, str] = field(default_factory=dict)  # prompt_id -> text
@@ -319,12 +320,34 @@ def _run_variant(
             logger.warning("MMLU evaluation failed for %s: %s", variant.repo, e)
             mmlu_acc, mmlu_correct, mmlu_total = None, 0, 0
 
+        # Tool calling evaluation
+        on_progress(ProgressEvent(
+            stage="quality",
+            family_name=family.name,
+            variant_repo=variant.repo,
+            variant_quant=variant.quant,
+            message="Running tool calling evaluation...",
+            overall_progress=overall_progress,
+        ))
+        tool_call_results = None
+        try:
+            from bench.tool_calling import eval_tool_calling
+            tc_path = Path("evals/tool_calling.toml")
+            if tc_path.exists():
+                tool_call_results = eval_tool_calling(model, tokenizer, tc_path)
+        except Exception as e:
+            logger.warning("Tool calling evaluation failed for %s: %s", variant.repo, e)
+
         vr.quality = QualityResults(
             perplexity=ppl,
             mmlu_accuracy=mmlu_acc,
             mmlu_correct=mmlu_correct,
             mmlu_total=mmlu_total,
         )
+
+        # Attach tool calling results
+        if tool_call_results:
+            vr.tool_calling = tool_call_results
 
     # Aggregate performance metrics per-prompt first, then combine.
     # Aggregating across prompts directly inflates CV% because different
@@ -390,6 +413,7 @@ def _build_session(
     quality_data: dict[str, Any] = {}
     aggregated_data: dict[str, Any] = {}
     power_data: dict[str, Any] = {}
+    tool_calling_data: dict[str, Any] = {}
 
     for vr in variant_results:
         key = f"{vr.variant.repo}|{vr.variant.quant}"
@@ -399,6 +423,17 @@ def _build_session(
 
         if vr.quality:
             quality_data[key] = asdict(vr.quality)
+
+        if vr.tool_calling:
+            tool_calling_data[key] = {
+                "total": vr.tool_calling.total,
+                "json_valid_rate": vr.tool_calling.json_valid_rate,
+                "function_accuracy": vr.tool_calling.function_accuracy,
+                "param_accuracy": vr.tool_calling.param_accuracy,
+                "refusal_accuracy": vr.tool_calling.refusal_accuracy,
+                "overall_accuracy": vr.tool_calling.overall_accuracy,
+                "results": [asdict(r) for r in vr.tool_calling.results],
+            }
 
         if vr.aggregated:
             agg = {}
@@ -434,6 +469,7 @@ def _build_session(
         config_snapshot=config_snapshot,
         runs=runs_data,
         quality=quality_data,
+        tool_calling=tool_calling_data,
         aggregated=aggregated_data,
         power=power_data,
     )

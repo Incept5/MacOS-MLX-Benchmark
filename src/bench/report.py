@@ -39,6 +39,7 @@ def _build_html(session: SessionResult) -> str:
     sys = session.system_info
     cfg = session.config_snapshot
     agg = session.aggregated
+    tc = session.tool_calling
     qual = session.quality
     pwr = session.power
     families = cfg.get("model_families", [])
@@ -119,7 +120,7 @@ def _build_html(session: SessionResult) -> str:
                  '<b>tok/W</b> shows energy efficiency — higher means more output per watt of power. '
                  '<b>Perplexity</b> measures language understanding (lower = smarter). '
                  '<b>MMLU</b> is accuracy on knowledge questions (higher = smarter).</p>')
-    parts.append(_summary_table(agg, qual, pwr, variant_info))
+    parts.append(_summary_table(agg, qual, pwr, tc, variant_info))
     parts.append("</section>")
 
     # Per-family comparison
@@ -164,6 +165,20 @@ def _build_html(session: SessionResult) -> str:
         parts.append(_power_table(pwr, variant_info))
         parts.append("</section>")
 
+    # Tool calling
+    if tc:
+        parts.append('<section>')
+        parts.append("<h2>Tool Calling</h2>")
+        parts.append('<p class="section-desc">Tests whether the model can act as an AI agent by calling the right tools with the right parameters. '
+                     'This matters for apps like OpenClaw, where the model needs to invoke functions (search the web, send emails, manage files) '
+                     'based on natural language instructions. '
+                     '<b>Function accuracy</b> — did it pick the right tool? '
+                     '<b>Param accuracy</b> — did it extract the correct arguments from the user\'s message? '
+                     '<b>JSON valid</b> — did it produce parseable structured output? '
+                     '<b>Refusal</b> — did it correctly avoid calling a tool when none was needed?</p>')
+        parts.append(_tool_calling_table(tc, variant_info))
+        parts.append("</section>")
+
     # Embed raw JSON for reference
     parts.append('<section>')
     parts.append('<details><summary>Raw JSON</summary>')
@@ -195,6 +210,12 @@ def _info_card(label: str, value: str) -> str:
 
 # Column help text for tooltips
 _HELP = {
+    "JSON Valid": "Percentage of tool-calling scenarios where the model produced parseable structured output (JSON function call). 100% means the model always formats tool calls correctly.",
+    "Function Acc.": "Percentage of scenarios where the model selected the correct tool/function from the available options.",
+    "Param Acc.": "Percentage of scenarios where the model extracted the correct parameters from the user's natural language message.",
+    "Refusal Acc.": "Percentage of scenarios where the model correctly chose NOT to call a tool when the request didn't need one (e.g., casual conversation).",
+    "Overall": "Combined accuracy across all tool calling scenarios — function selection + correct refusals.",
+    "Tools": "Tool calling accuracy — how often the model correctly selects the right function and extracts the right parameters from natural language. Tests single-tool, multi-choice, parameter extraction, multi-step, and refusal scenarios. Critical for AI agent use cases like OpenClaw. (higher is better)",
     "Prefill": "Prompt processing speed in tokens/sec — how fast the model reads the input (higher is better). Scales with input length.",
     "Decode": "Token generation speed in tokens/sec — how fast the model produces output (higher is better). This is the sustained throughput.",
     "Model": "HuggingFace repo or local model directory name",
@@ -237,7 +258,7 @@ def _short_name(key: str, variant_info: dict[str, dict]) -> str:
 
 
 def _summary_table(
-    agg: dict, qual: dict, pwr: dict, variant_info: dict[str, dict]
+    agg: dict, qual: dict, pwr: dict, tc: dict, variant_info: dict[str, dict]
 ) -> str:
     rows: list[str] = []
     for key, metrics in agg.items():
@@ -259,6 +280,9 @@ def _summary_table(
         p = pwr.get(key, {})
         watts = p.get("avg_watts")
 
+        t = tc.get(key, {}) if tc else {}
+        tool_acc = t.get("overall_accuracy")
+
         rows.append(
             f"<tr>"
             f"<td>{html.escape(name)}</td>"
@@ -271,6 +295,7 @@ def _summary_table(
             f'<td class="num">{_fmt(watts, ".1f")}</td>'
             f'<td class="num">{_fmt(ppl, ".2f")}</td>'
             f'<td class="num">{_fmt(mmlu * 100 if mmlu is not None else None, ".1f", "%")}</td>'
+            f'<td class="num">{_fmt(tool_acc * 100 if tool_acc is not None else None, ".1f", "%")}</td>'
             f"</tr>"
         )
 
@@ -286,6 +311,7 @@ def _summary_table(
         f'{_th("Watts", "num")}'
         f'{_th("Perplexity", "num")}'
         f'{_th("MMLU", "num")}'
+        f'{_th("Tools", "num")}'
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
@@ -503,6 +529,42 @@ def _prompt_table(
         f'{_th("Decode", "num")}'
         f'{_th("95% CI", "num")}'
         f'{_th("CV%", "num")}'
+        f'{_th("N", "num")}'
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _tool_calling_table(tc: dict, variant_info: dict[str, dict]) -> str:
+    rows: list[str] = []
+    for key, data in tc.items():
+        name = _short_name(key, variant_info)
+        info = variant_info.get(key, {})
+        quant = info.get("quant", key.split("|")[-1])
+
+        rows.append(
+            f"<tr>"
+            f"<td>{html.escape(name)}</td>"
+            f'<td><span class="badge badge-{quant}">{html.escape(quant)}</span></td>'
+            f'<td class="num">{_fmt(data.get("json_valid_rate", 0) * 100, ".1f", "%")}</td>'
+            f'<td class="num">{_fmt(data.get("function_accuracy", 0) * 100, ".1f", "%")}</td>'
+            f'<td class="num">{_fmt(data.get("param_accuracy", 0) * 100, ".1f", "%")}</td>'
+            f'<td class="num">{_fmt(data.get("refusal_accuracy", 0) * 100, ".1f", "%")}</td>'
+            f'<td class="num">{_fmt(data.get("overall_accuracy", 0) * 100, ".1f", "%")}</td>'
+            f'<td class="num">{data.get("total", 0)}</td>'
+            f"</tr>"
+        )
+
+    return (
+        '<table class="data-table sortable">'
+        "<thead><tr>"
+        f'{_th("Model")}{_th("Quant")}'
+        f'{_th("JSON Valid", "num")}'
+        f'{_th("Function Acc.", "num")}'
+        f'{_th("Param Acc.", "num")}'
+        f'{_th("Refusal Acc.", "num")}'
+        f'{_th("Overall", "num")}'
         f'{_th("N", "num")}'
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"

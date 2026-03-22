@@ -1,0 +1,450 @@
+# Tool Calling Evaluation Suite
+# Tests whether models can correctly invoke tools with proper parameters.
+# Scenarios are grouped by complexity: single-tool, multi-choice, parameter-extraction, multi-step.
+#
+# Each scenario defines:
+#   - tools: list of available tool definitions (OpenAI function calling format)
+#   - user_message: the user's request
+#   - expected_calls: list of expected tool calls [{function, args}]
+#
+# Scoring:
+#   - function_accuracy: did the model pick the right function?
+#   - param_accuracy: did it extract the correct parameters?
+#   - json_valid: was the output parseable as a tool call?
+
+# ============================================================
+# SINGLE TOOL — only one tool available, test parameter extraction
+# ============================================================
+
+[[scenario]]
+id = "weather-simple"
+category = "single-tool"
+user_message = "What's the weather like in Tokyo right now?"
+
+[[scenario.tools]]
+name = "get_weather"
+description = "Get the current weather for a location"
+parameters = { type = "object", properties = { location = { type = "string", description = "City name" }, unit = { type = "string", enum = ["celsius", "fahrenheit"], description = "Temperature unit" } }, required = ["location"] }
+
+[[scenario.expected_calls]]
+function = "get_weather"
+args = { location = "Tokyo" }
+
+# ---
+
+[[scenario]]
+id = "send-email-simple"
+category = "single-tool"
+user_message = "Send an email to alice@example.com saying the meeting is moved to 3pm"
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email to a recipient"
+parameters = { type = "object", properties = { to = { type = "string", description = "Recipient email address" }, subject = { type = "string", description = "Email subject" }, body = { type = "string", description = "Email body" } }, required = ["to", "body"] }
+
+[[scenario.expected_calls]]
+function = "send_email"
+args = { to = "alice@example.com" }
+
+# ---
+
+[[scenario]]
+id = "create-reminder"
+category = "single-tool"
+user_message = "Remind me to buy groceries tomorrow at 5pm"
+
+[[scenario.tools]]
+name = "create_reminder"
+description = "Create a reminder at a specific time"
+parameters = { type = "object", properties = { text = { type = "string", description = "Reminder text" }, time = { type = "string", description = "ISO 8601 datetime or natural language time" } }, required = ["text", "time"] }
+
+[[scenario.expected_calls]]
+function = "create_reminder"
+args = { text = "buy groceries" }
+
+# ---
+
+[[scenario]]
+id = "search-files"
+category = "single-tool"
+user_message = "Find all Python files modified in the last week"
+
+[[scenario.tools]]
+name = "search_files"
+description = "Search for files matching criteria"
+parameters = { type = "object", properties = { pattern = { type = "string", description = "File glob pattern" }, modified_after = { type = "string", description = "Only files modified after this date" } }, required = ["pattern"] }
+
+[[scenario.expected_calls]]
+function = "search_files"
+args = { pattern = "*.py" }
+
+# ---
+
+[[scenario]]
+id = "calculate-simple"
+category = "single-tool"
+user_message = "What's 15% tip on a $84.50 bill?"
+
+[[scenario.tools]]
+name = "calculate"
+description = "Evaluate a mathematical expression"
+parameters = { type = "object", properties = { expression = { type = "string", description = "Mathematical expression to evaluate" } }, required = ["expression"] }
+
+[[scenario.expected_calls]]
+function = "calculate"
+args = {}
+
+# ============================================================
+# MULTI-CHOICE — multiple tools available, must pick the right one
+# ============================================================
+
+[[scenario]]
+id = "pick-weather-not-email"
+category = "multi-choice"
+user_message = "Is it going to rain in London today?"
+
+[[scenario.tools]]
+name = "get_weather"
+description = "Get the current weather for a location"
+parameters = { type = "object", properties = { location = { type = "string" }, unit = { type = "string", enum = ["celsius", "fahrenheit"] } }, required = ["location"] }
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email to a recipient"
+parameters = { type = "object", properties = { to = { type = "string" }, subject = { type = "string" }, body = { type = "string" } }, required = ["to", "body"] }
+
+[[scenario.tools]]
+name = "create_event"
+description = "Create a calendar event"
+parameters = { type = "object", properties = { title = { type = "string" }, start_time = { type = "string" }, end_time = { type = "string" } }, required = ["title", "start_time"] }
+
+[[scenario.expected_calls]]
+function = "get_weather"
+args = { location = "London" }
+
+# ---
+
+[[scenario]]
+id = "pick-calendar-not-reminder"
+category = "multi-choice"
+user_message = "Schedule a team standup meeting for Monday at 9am lasting 30 minutes"
+
+[[scenario.tools]]
+name = "create_reminder"
+description = "Create a simple reminder"
+parameters = { type = "object", properties = { text = { type = "string" }, time = { type = "string" } }, required = ["text", "time"] }
+
+[[scenario.tools]]
+name = "create_event"
+description = "Create a calendar event with start and end times"
+parameters = { type = "object", properties = { title = { type = "string" }, start_time = { type = "string" }, end_time = { type = "string" }, attendees = { type = "array", items = { type = "string" } } }, required = ["title", "start_time"] }
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email"
+parameters = { type = "object", properties = { to = { type = "string" }, subject = { type = "string" }, body = { type = "string" } }, required = ["to", "body"] }
+
+[[scenario.expected_calls]]
+function = "create_event"
+args = { title = "team standup" }
+
+# ---
+
+[[scenario]]
+id = "pick-search-not-browse"
+category = "multi-choice"
+user_message = "What were Apple's Q4 2025 earnings?"
+
+[[scenario.tools]]
+name = "web_search"
+description = "Search the web for information"
+parameters = { type = "object", properties = { query = { type = "string", description = "Search query" } }, required = ["query"] }
+
+[[scenario.tools]]
+name = "browse_url"
+description = "Fetch and read the content of a specific URL"
+parameters = { type = "object", properties = { url = { type = "string", description = "URL to fetch" } }, required = ["url"] }
+
+[[scenario.tools]]
+name = "calculate"
+description = "Evaluate a mathematical expression"
+parameters = { type = "object", properties = { expression = { type = "string" } }, required = ["expression"] }
+
+[[scenario.expected_calls]]
+function = "web_search"
+args = {}
+
+# ---
+
+[[scenario]]
+id = "pick-read-file"
+category = "multi-choice"
+user_message = "Show me the contents of config.yaml"
+
+[[scenario.tools]]
+name = "read_file"
+description = "Read the contents of a file"
+parameters = { type = "object", properties = { path = { type = "string", description = "File path" } }, required = ["path"] }
+
+[[scenario.tools]]
+name = "write_file"
+description = "Write content to a file"
+parameters = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
+
+[[scenario.tools]]
+name = "search_files"
+description = "Search for files matching a pattern"
+parameters = { type = "object", properties = { pattern = { type = "string" } }, required = ["pattern"] }
+
+[[scenario.expected_calls]]
+function = "read_file"
+args = { path = "config.yaml" }
+
+# ---
+
+[[scenario]]
+id = "pick-write-not-read"
+category = "multi-choice"
+user_message = "Create a new file called notes.txt with the text 'Meeting notes from today'"
+
+[[scenario.tools]]
+name = "read_file"
+description = "Read the contents of a file"
+parameters = { type = "object", properties = { path = { type = "string" } }, required = ["path"] }
+
+[[scenario.tools]]
+name = "write_file"
+description = "Write content to a file"
+parameters = { type = "object", properties = { path = { type = "string" }, content = { type = "string" } }, required = ["path", "content"] }
+
+[[scenario.tools]]
+name = "delete_file"
+description = "Delete a file"
+parameters = { type = "object", properties = { path = { type = "string" } }, required = ["path"] }
+
+[[scenario.expected_calls]]
+function = "write_file"
+args = { path = "notes.txt" }
+
+# ============================================================
+# PARAMETER EXTRACTION — correct function but tricky parameters
+# ============================================================
+
+[[scenario]]
+id = "extract-multiple-recipients"
+category = "parameter-extraction"
+user_message = "Send a message to bob@company.com and carol@company.com about the project deadline being extended to March 30"
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email"
+parameters = { type = "object", properties = { to = { type = "array", items = { type = "string" }, description = "Recipient email addresses" }, subject = { type = "string" }, body = { type = "string" } }, required = ["to", "body"] }
+
+[[scenario.expected_calls]]
+function = "send_email"
+args = { to = ["bob@company.com", "carol@company.com"] }
+
+# ---
+
+[[scenario]]
+id = "extract-coordinates"
+category = "parameter-extraction"
+user_message = "Show me restaurants near latitude 37.7749, longitude -122.4194"
+
+[[scenario.tools]]
+name = "search_nearby"
+description = "Search for places near a location"
+parameters = { type = "object", properties = { latitude = { type = "number" }, longitude = { type = "number" }, category = { type = "string" }, radius_km = { type = "number" } }, required = ["latitude", "longitude", "category"] }
+
+[[scenario.expected_calls]]
+function = "search_nearby"
+args = { latitude = 37.7749, longitude = -122.4194, category = "restaurants" }
+
+# ---
+
+[[scenario]]
+id = "extract-date-range"
+category = "parameter-extraction"
+user_message = "Show me all sales transactions between January 15 and February 28, 2026"
+
+[[scenario.tools]]
+name = "query_transactions"
+description = "Query sales transactions in a date range"
+parameters = { type = "object", properties = { start_date = { type = "string", description = "Start date (YYYY-MM-DD)" }, end_date = { type = "string", description = "End date (YYYY-MM-DD)" }, type = { type = "string", enum = ["sales", "returns", "all"] } }, required = ["start_date", "end_date"] }
+
+[[scenario.expected_calls]]
+function = "query_transactions"
+args = { start_date = "2026-01-15", end_date = "2026-02-28", type = "sales" }
+
+# ---
+
+[[scenario]]
+id = "extract-nested-filter"
+category = "parameter-extraction"
+user_message = "Find open GitHub issues labeled 'bug' in the frontend repo sorted by most recent"
+
+[[scenario.tools]]
+name = "search_issues"
+description = "Search GitHub issues"
+parameters = { type = "object", properties = { repo = { type = "string" }, state = { type = "string", enum = ["open", "closed", "all"] }, labels = { type = "array", items = { type = "string" } }, sort = { type = "string", enum = ["created", "updated", "comments"] }, order = { type = "string", enum = ["asc", "desc"] } }, required = ["repo"] }
+
+[[scenario.expected_calls]]
+function = "search_issues"
+args = { repo = "frontend", state = "open", labels = ["bug"], sort = "created", order = "desc" }
+
+# ---
+
+[[scenario]]
+id = "extract-code-params"
+category = "parameter-extraction"
+user_message = "Run the test suite for the auth module with verbose output and stop on first failure"
+
+[[scenario.tools]]
+name = "run_tests"
+description = "Run test suite"
+parameters = { type = "object", properties = { module = { type = "string", description = "Module to test" }, verbose = { type = "boolean" }, fail_fast = { type = "boolean" }, coverage = { type = "boolean" } }, required = ["module"] }
+
+[[scenario.expected_calls]]
+function = "run_tests"
+args = { module = "auth", verbose = true, fail_fast = true }
+
+# ============================================================
+# MULTI-STEP — model should recognize it needs multiple tool calls
+# ============================================================
+
+[[scenario]]
+id = "read-then-email"
+category = "multi-step"
+user_message = "Read the file report.pdf and email a summary to boss@company.com"
+
+[[scenario.tools]]
+name = "read_file"
+description = "Read the contents of a file"
+parameters = { type = "object", properties = { path = { type = "string" } }, required = ["path"] }
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email"
+parameters = { type = "object", properties = { to = { type = "string" }, subject = { type = "string" }, body = { type = "string" } }, required = ["to", "body"] }
+
+[[scenario.expected_calls]]
+function = "read_file"
+args = { path = "report.pdf" }
+
+# ---
+
+[[scenario]]
+id = "search-then-create"
+category = "multi-step"
+user_message = "Look up the current Bitcoin price and add it to my spreadsheet prices.csv"
+
+[[scenario.tools]]
+name = "web_search"
+description = "Search the web"
+parameters = { type = "object", properties = { query = { type = "string" } }, required = ["query"] }
+
+[[scenario.tools]]
+name = "write_file"
+description = "Write or append to a file"
+parameters = { type = "object", properties = { path = { type = "string" }, content = { type = "string" }, append = { type = "boolean" } }, required = ["path", "content"] }
+
+[[scenario.expected_calls]]
+function = "web_search"
+args = {}
+
+# ---
+
+[[scenario]]
+id = "weather-then-calendar"
+category = "multi-step"
+user_message = "Check if it's going to be sunny in San Francisco this Saturday, and if so create an outdoor picnic event"
+
+[[scenario.tools]]
+name = "get_weather"
+description = "Get weather forecast"
+parameters = { type = "object", properties = { location = { type = "string" }, date = { type = "string" } }, required = ["location"] }
+
+[[scenario.tools]]
+name = "create_event"
+description = "Create a calendar event"
+parameters = { type = "object", properties = { title = { type = "string" }, start_time = { type = "string" }, location = { type = "string" } }, required = ["title", "start_time"] }
+
+[[scenario.expected_calls]]
+function = "get_weather"
+args = { location = "San Francisco" }
+
+# ---
+
+[[scenario]]
+id = "list-then-delete"
+category = "multi-step"
+user_message = "Show me all files in the temp directory and delete any .log files"
+
+[[scenario.tools]]
+name = "list_files"
+description = "List files in a directory"
+parameters = { type = "object", properties = { path = { type = "string" }, pattern = { type = "string" } }, required = ["path"] }
+
+[[scenario.tools]]
+name = "delete_file"
+description = "Delete a file"
+parameters = { type = "object", properties = { path = { type = "string" } }, required = ["path"] }
+
+[[scenario.expected_calls]]
+function = "list_files"
+args = { path = "temp" }
+
+# ============================================================
+# REFUSAL — should NOT call a tool (respond with text instead)
+# ============================================================
+
+[[scenario]]
+id = "no-tool-greeting"
+category = "refusal"
+user_message = "Hello, how are you today?"
+
+[[scenario.tools]]
+name = "web_search"
+description = "Search the web"
+parameters = { type = "object", properties = { query = { type = "string" } }, required = ["query"] }
+
+[[scenario.tools]]
+name = "send_email"
+description = "Send an email"
+parameters = { type = "object", properties = { to = { type = "string" }, body = { type = "string" } }, required = ["to", "body"] }
+
+# expected_calls is empty — model should NOT call any tool
+
+[[scenario]]
+id = "no-tool-opinion"
+category = "refusal"
+user_message = "What do you think about the new Star Wars movie?"
+
+[[scenario.tools]]
+name = "web_search"
+description = "Search the web"
+parameters = { type = "object", properties = { query = { type = "string" } }, required = ["query"] }
+
+[[scenario.tools]]
+name = "create_event"
+description = "Create a calendar event"
+parameters = { type = "object", properties = { title = { type = "string" }, start_time = { type = "string" } }, required = ["title", "start_time"] }
+
+# expected_calls is empty
+
+[[scenario]]
+id = "no-tool-math-simple"
+category = "refusal"
+user_message = "What is 2 + 2?"
+
+[[scenario.tools]]
+name = "calculate"
+description = "Evaluate a complex mathematical expression"
+parameters = { type = "object", properties = { expression = { type = "string" } }, required = ["expression"] }
+
+[[scenario.tools]]
+name = "web_search"
+description = "Search the web"
+parameters = { type = "object", properties = { query = { type = "string" } }, required = ["query"] }
+
+# expected_calls is empty — trivial math should not require a tool

@@ -71,6 +71,7 @@ class SessionResult:
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     runs: list[dict[str, Any]] = field(default_factory=list)
     quality: dict[str, Any] = field(default_factory=dict)
+    tool_calling: dict[str, Any] = field(default_factory=dict)
     aggregated: dict[str, Any] = field(default_factory=dict)
     power: dict[str, Any] = field(default_factory=dict)
 
@@ -105,6 +106,7 @@ def load_session(path: str | Path) -> SessionResult:
         config_snapshot=data.get("config_snapshot", {}),
         runs=data.get("runs", []),
         quality=data.get("quality", {}),
+        tool_calling=data.get("tool_calling", {}),
         aggregated=data.get("aggregated", {}),
         power=data.get("power", {}),
     )
