@@ -232,15 +232,21 @@ def _manual_tool_prompt(scenario: ToolCallScenario) -> str:
     )
 
 
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks from model output."""
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+
+
 def _contains_tool_call(text: str) -> bool:
     """Check if text contains anything that looks like a tool call."""
-    # Check common tool call patterns
+    text = _strip_thinking(text)
     patterns = [
         r'"name"\s*:\s*"',
         r'"function"\s*:\s*"',
         r'<tool_call>',
         r'\{"name"',
         r'<\|tool_call\|>',
+        r'<function=',
     ]
     for pattern in patterns:
         if re.search(pattern, text, re.IGNORECASE):
@@ -249,28 +255,53 @@ def _contains_tool_call(text: str) -> bool:
 
 
 def _parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
-    """Parse a tool call from model output. Handles multiple formats."""
-    # Try: {"name": "func", "arguments": {...}}
-    # Try: {"function": "func", "arguments": {...}}
-    # Try: <tool_call>{"name": ...}</tool_call>
-    # Try: ```json {...} ```
+    """Parse a tool call from model output. Handles multiple formats:
 
-    # Strip common wrappers
+    1. Qwen3.5 XML: <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+    2. JSON: {"name": "func", "arguments": {...}}
+    3. JSON wrapped: <tool_call>{"name": ...}</tool_call>
+    4. Markdown: ```json {...} ```
+    """
+    text = _strip_thinking(text)
     text = text.strip()
 
-    # Remove <tool_call> tags
-    text = re.sub(r'<\|?/?tool_call\|?>', '', text).strip()
+    # --- Format 1: Qwen3.5 XML tool call ---
+    # <tool_call>\n<function=get_weather>\n<parameter=location>\nTokyo\n</parameter>\n</function>\n</tool_call>
+    qwen_match = re.search(
+        r'<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>',
+        text, re.DOTALL,
+    )
+    if qwen_match:
+        func_name = qwen_match.group(1).strip()
+        params_block = qwen_match.group(2)
+        args = {}
+        for param_match in re.finditer(
+            r'<parameter=([^>]+)>\s*(.*?)\s*</parameter>',
+            params_block, re.DOTALL,
+        ):
+            param_name = param_match.group(1).strip()
+            param_value = param_match.group(2).strip()
+            # Try to parse as JSON value (number, bool, array, object)
+            try:
+                args[param_name] = json.loads(param_value)
+            except (json.JSONDecodeError, ValueError):
+                args[param_name] = param_value
+        return func_name, args
+
+    # --- Format 2+: JSON-based formats ---
+    # Remove <tool_call> tags (for JSON-inside-tags format)
+    cleaned = re.sub(r'<\|?/?tool_call\|?>', '', text).strip()
 
     # Remove markdown code blocks
-    md_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    md_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
     if md_match:
-        text = md_match.group(1)
+        cleaned = md_match.group(1)
 
     # Find JSON objects in the text
-    json_objects = _extract_json_objects(text)
+    json_objects = _extract_json_objects(cleaned)
 
     for obj in json_objects:
-        # Format 1: {"name": "func", "arguments": {...}}
+        # {"name": "func", "arguments": {...}}
         if "name" in obj and isinstance(obj.get("name"), str):
             func_name = obj["name"]
             args = obj.get("arguments", obj.get("parameters", {}))
@@ -281,12 +312,12 @@ def _parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
                     args = {}
             return func_name, args if isinstance(args, dict) else {}
 
-        # Format 2: {"function": {"name": "func", "arguments": {...}}}
+        # {"function": {"name": "func", "arguments": {...}}}
         if "function" in obj and isinstance(obj["function"], dict):
             func = obj["function"]
             return func.get("name", ""), func.get("arguments", {})
 
-        # Format 3: {"type": "function", "function": {"name": ...}}
+        # {"type": "function", "function": {"name": ...}}
         if obj.get("type") == "function" and "function" in obj:
             func = obj["function"]
             return func.get("name", ""), func.get("arguments", {})
